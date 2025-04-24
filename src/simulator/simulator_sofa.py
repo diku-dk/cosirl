@@ -71,34 +71,44 @@ class SofaColonEndoscopeEnv:
         
         return root
  
+    def load_mesh(self, sofa_target, mesh_path):
+        if mesh_path.endswith(".obj"):
+            mesh_loader = sofa_target.addObject(
+                    'MeshOBJLoader',
+                    name='loader', 
+                    filename=mesh_path, 
+                    triangulate=True,
+                    )
+            _ = mesh_loader # why does it make a mesh_loader object?
+        else:
+            raise NotImplemented(f"Add more readers for this filetype: '{mesh_path}'")
 
     def add_colon_to_scene(self, scene_root, colon_path: str):
         colon_node = scene_root.addChild("Colon")
         
-        if colon_path.endswith(".obj"):
-            mesh_loader = colon_node.addObject('MeshOBJLoader', name='loader', 
-                                               filename=colon_path, 
-                                               triangulate=True)
-            _ = mesh_loader # why does it make a mesh_loader object?
-        else:
-            raise NotImplemented(f"Add more readers for this filetype: '{colon_path}'")
-
+        self.load_mesh(sofa_target=colon_node, mesh_path=colon_path)
         colon_node.addObject('MeshTopology', src='@loader')
+
         colon_node.addObject('MechanicalObject', name='dofs', template='Vec3d') 
-        visual = colon_node.addChild('Visual')
+        #visual = colon_node.addChild('Visual')
         colon_node.addObject('OglModel', name='visual', 
                             color=[0.8, 0.4, 0.3, 1.0],
                             src='@../Colon/loader') 
 
     def add_robot_to_scene(self, scene_root, robot_config):
-        _ = robot_config # TODO: Add a config
-        # TODO: Add implementation
+        capsule_node = scene_root.addChild("Robot")
+        
+        self.load_mesh(sofa_target=capsule_node, mesh_path=robot_config["mesh_path"])
+        capsule_node.addObject('MeshTopology', src='@loader')
+
+        capsule_node.addObject("MechanicalObject", name="dofs", template="Vec3d")
+        capsule_node.addObject("OglModel", src="@../Robot/loader", color=[0.8, 0.2, 0.2, 1.0])
 
     def reset(self):
         colon_path = self.get_next_batch()
         self.scene_root = self.init_sofa_scene()
         self.add_colon_to_scene(self.scene_root, colon_path=colon_path)
-        self.add_robot_to_scene(self.scene_root, robot_config=None)
+        self.add_robot_to_scene(self.scene_root, robot_config=self.config["robot"])
         
         self.scene_root.init()
 
