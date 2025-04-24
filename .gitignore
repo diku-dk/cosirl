@@ -182,3 +182,13 @@ wheels/
 
 # Virtual environments
 .venv
+
+# data dir
+data/
+
+# SOFA generated stuff
+lastUsedGUI.ini
+runSofa.ini
+
+# uv
+uv.lock
