@@ -22,6 +22,8 @@ def main():
     action = agent.get_action(state)
     state = env.step(action)
     print(state)
+    state = env.reset()
+    state = env.step(action)
     env.visualize_environment()
     #train_episode(agent, env)
 

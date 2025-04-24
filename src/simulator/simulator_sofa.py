@@ -8,96 +8,121 @@ from src.simulator import setup_sofa
 from src.nn.colon_dataloader import create_mesh_dataloader
 from src.nn.data_augmentation import IdentityTransform
 
+def setup_sofa_custom(config):
+    # This is here for now, probably move to setup_sofa
+    setup_sofa.setup_sofa_environment(config)
+    
+    import Sofa
+    import SofaRuntime
+    from SofaRuntime import PluginRepository, importPlugin
+
+    importPlugin("Sofa.Component.Visual") # For VisualStyle
+    importPlugin("Sofa.GL.Component.Shader") # For visual rendering
+    importPlugin("Sofa.GL.Component.Rendering3D") # For OglModel
+    importPlugin("Sofa.Component.StateContainer") # For MechanicalObject
+    importPlugin("Sofa.Component.IO.Mesh") # For MeshOBJLoader
+    importPlugin("Sofa.Component.Topology.Container.Constant") # For MeshTopology
+    importPlugin("Sofa.Component.Setting")  # For BackgroundSetting
+
+
 class SofaColonEndoscopeEnv:
     def __init__(self, config):
-        setup_sofa.setup_sofa_environment(config)
-        
-        import Sofa
-        import SofaRuntime
-        from SofaRuntime import PluginRepository, importPlugin
+        setup_sofa_custom(config)
 
-        importPlugin("Sofa.Component.Visual") # For VisualStyle
-        importPlugin("Sofa.GL.Component.Shader") # For visual rendering
-        importPlugin("Sofa.GL.Component.Rendering3D") # For OglModel
-        importPlugin("Sofa.Component.StateContainer") # For MechanicalObject
-        importPlugin("Sofa.Component.IO.Mesh") # For MeshOBJLoader
-        importPlugin("Sofa.Component.Topology.Container.Constant") # For MeshTopology
-        importPlugin("Sofa.Component.Setting")  # For BackgroundSetting
- 
         self.config = config
         self.observation_space = np.array([0.0])  # Example: 1D continuous
         self.action_space = np.array([0, 1])      # Example: 2 discrete actions
         self.state = None
-
-        self.root = Sofa.Core.Node("root")
-        self.root.dt = 0.01
-
-        # Add both animation loop and visual loop
-        self.root.addObject('DefaultAnimationLoop')
-        self.root.addObject('DefaultVisualManagerLoop')  # Required for visualization
-        self.root.addObject('VisualStyle', displayFlags="showVisual showBehavior")
         
-        # Add camera for better view
-        self.root.addObject('Camera', position=[0, 0, 10], lookAt=[0, 0, 0])
-        
-        # Set background color
-        self.root.addObject('BackgroundSetting', color=[1, 1, 1, 1])  # White background
-    
         self.colon_dataloader = create_mesh_dataloader(
             mesh_dir=config["user_settings"]["colon_dir"],
-            batch_size=1,
+            batch_size=1, # TODO: While this should be here, potentially we should share a dataloader between vectorized envs later
             transform=IdentityTransform()
         )
         self.data_generator = iter(self.colon_dataloader)
+        self.scene_root = None 
+    
+    def get_next_batch(self):
+        try:
+            batch = next(self.data_generator)
+        except StopIteration:
+            # Re-create the iterator, which will re-shuffle if shuffle=True
+            self.data_generator = iter(self.colon_dataloader)
+            batch = next(self.data_generator)
+        return batch[0]
 
-        self.sofa_state = self.root
+    def init_sofa_scene(self):
+        import Sofa
+        root = Sofa.Core.Node("root")
+        root.dt = 0.01
+        # This should no longer be needed if we recreate the root every time
+        #if self.root.isInitialized():
+        #    # Clear existing children if needed
+        #    for child in list(self.root.children):
+        #        self.root.removeChild(child)        # Get first mesh from dataloader
+         
+        # Add both animation loop and visual loop
+        root.addObject('DefaultAnimationLoop')
+        root.addObject('DefaultVisualManagerLoop')  # Required for visualization
+        root.addObject('VisualStyle', displayFlags="showVisual showBehavior")
         
-    def reset(self):
-        new_colon_paths = next(self.data_generator)
+        # Add camera for better view
+        root.addObject('Camera', position=[0, 0, 10], lookAt=[0, 0, 0])
+        
+        return root
+ 
 
-        if self.root.isInitialized():
-            self.root.reset()
-            # Clear existing children if needed
-            for child in list(self.root.children):
-                self.root.removeChild(child)        # Get first mesh from dataloader
-            
-        # Create colon node
-        colon_node = self.root.addChild("Colon")
+    def add_colon_to_scene(self, scene_root, colon_path: str):
+        colon_node = scene_root.addChild("Colon")
         
-        if new_colon_paths[0].endswith(".obj"):
+        if colon_path.endswith(".obj"):
             mesh_loader = colon_node.addObject('MeshOBJLoader', name='loader', 
-                                              filename=new_colon_paths[0], 
-                                              triangulate=True)
+                                               filename=colon_path, 
+                                               triangulate=True)
+            _ = mesh_loader # why does it make a mesh_loader object?
         else:
-            raise NotImplemented(f"Add more readers for this filetype: '{new_colon_paths[0]}'")
+            raise NotImplemented(f"Add more readers for this filetype: '{colon_path}'")
 
         colon_node.addObject('MeshTopology', src='@loader')
         colon_node.addObject('MechanicalObject', name='dofs', template='Vec3d') 
         visual = colon_node.addChild('Visual')
         colon_node.addObject('OglModel', name='visual', 
                             color=[0.8, 0.4, 0.3, 1.0],
-                            src='@../Colon/loader')
-        
-        self.root.init()
+                            src='@../Colon/loader') 
 
-        self.sensor_output = self.update_sensor_output(self.sofa_state) 
+    def add_robot_to_scene(self, scene_root, robot_config):
+        _ = robot_config # TODO: Add a config
+        # TODO: Add implementation
+
+    def reset(self):
+        colon_path = self.get_next_batch()
+        self.scene_root = self.init_sofa_scene()
+        self.add_colon_to_scene(self.scene_root, colon_path=colon_path)
+        self.add_robot_to_scene(self.scene_root, robot_config=None)
+        
+        self.scene_root.init()
+
+
+        self.sensor_output = self.update_sensor_output(self.scene_root) 
         camera_sensors = self.sensor_output["camera_sensors"]
-        self.last_render = self.render(self.sofa_state, camera_sensors)
+        self.last_render = self.render(self.scene_root, camera_sensors)
         obs = [self.last_render, self.sensor_output]
         return obs
 
+    
+
     def step(self, action):
         
-        self.sofa_state = self.update_sofa_state(self.sofa_state, action)
-        self.sensor_output = self.update_sensor_output(self.sofa_state)
+        self.update_sofa_state(self.scene_root, action)
+        self.sensor_output = self.update_sensor_output(self.scene_root)
         camera_sensors = self.sensor_output["camera_sensors"]
-        self.last_render = self.render(self.sofa_state, camera_sensors)
+        self.last_render = self.render(self.scene_root, camera_sensors)
         obs = [self.last_render, self.sensor_output]
 
-        reward = self.calculate_reward(self.sofa_state, self.sensor_output)
+        reward = self.calculate_reward(self.scene_root, self.sensor_output)
         terminated = False # change to final terminated determiner
         truncated = False # change to final truncated determiner
-        info = {} # Optional extra info
+        info = {} # Optional extra infsofa_stateo
         return obs, reward, terminated, truncated, info
 
     def update_sofa_state(self, sofa_state, actions):
@@ -119,11 +144,11 @@ class SofaColonEndoscopeEnv:
         
         # Create GUI
         Sofa.Gui.GUIManager.Init("main", "qglviewer")
-        Sofa.Gui.GUIManager.createGUI(self.root, __file__)
+        Sofa.Gui.GUIManager.createGUI(self.scene_root, __file__)
         Sofa.Gui.GUIManager.SetDimension(1080, 1080)
         
         # Start GUI loop
-        Sofa.Gui.GUIManager.MainLoop(self.root)
+        Sofa.Gui.GUIManager.MainLoop(self.scene_root)
         Sofa.Gui.GUIManager.closeGUI()
 
 
