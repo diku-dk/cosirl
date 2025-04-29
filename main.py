@@ -24,8 +24,27 @@ def main():
     print(state)
     state = env.reset()
     state = env.step(action)
-    env.visualize_environment()
+    #env.visualize_environment()
     #train_episode(agent, env)
+    import numpy as np
+
+    obs, info = env.reset()
+    for step in range(1000):
+        print(step)
+        action = np.random.uniform(-1, 1, size=env.action_space.shape)
+        print("plop")
+        obs, reward, terminated, truncated, info = env.step(action)
+        print("sqmush")
+        if terminated or truncated:
+            print("flappo")
+            obs, info = env.reset()
+        print("dusmosh")
+        if step == 999:
+            print("sempropf")
+            env.visualize_environment()
+        print("vaggltag")
+            
+    env.close()
 
 if __name__ == "__main__":
     main()
