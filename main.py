@@ -28,21 +28,17 @@ def main():
     #train_episode(agent, env)
     import numpy as np
 
+    n_steps = 10
+
     obs, info = env.reset()
-    for step in range(1000):
+    for step in range(n_steps):
         print(step)
         action = np.random.uniform(-1, 1, size=env.action_space.shape)
-        print("plop")
         obs, reward, terminated, truncated, info = env.step(action)
-        print("sqmush")
         if terminated or truncated:
-            print("flappo")
             obs, info = env.reset()
-        print("dusmosh")
-        if step == 999:
-            print("sempropf")
+        if step == n_steps - 1:
             env.visualize_environment()
-        print("vaggltag")
             
     env.close()
 

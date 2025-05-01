@@ -15,12 +15,12 @@ class Robot:
         self.state = {}
 
     def step(self, scene_root, action):
-        self._apply_action(scene_root, action)
-        self.state = self._update_state(scene_root)
+        self._apply_action(action)
+        self.state = self._get_state(scene_root)
         return self.state
 
     @abstractmethod
-    def _apply_action(self, _scene_root, action):
+    def _apply_action(self, action):
         """
         Modify the objects of the scene root which are affected by the action to reflect that the action was taken.
         """
@@ -38,6 +38,8 @@ class Robot:
 
 class CapsuleRobot(Robot):
     def __init__(self, scene_root, robot_config):
+
+        # Setup SOFA
         self.capsule_node = scene_root.addChild("Robot")
         
         load_mesh(sofa_target=self.capsule_node, mesh_path=robot_config["mesh_path"])
@@ -53,7 +55,40 @@ class CapsuleRobot(Robot):
         self.capsule_node.addObject("OglModel", src="@../Robot/loader", color=[0.8, 0.2, 0.2, 1.0])
         self.force = self.capsule_node.addObject("ConstantForceField", name="force", forces=[[0,0,1]])
 
-    def _apply_action(self, _scene_root, action):
+        # Setup action spaces
+        self.action_space = spaces.Box(
+            low=-1.0, high=1.0, shape=(3,), dtype=np.float32
+        )
+        
+        # Camera output
+        camera_space = spaces.Box(
+            low=0, high=255, shape=(64, 64, 3), dtype=np.uint8
+        )
+        
+        # Scalar sensor output
+        sensor_space = spaces.Box(
+            low=-1.0, high=1.0, shape=(5,), dtype=np.float32
+        )
+        
+        # Robot arm location
+        arm_space = spaces.Box(
+            low=-2.0, high=2.0, shape=(4, 3), dtype=np.float32
+        )
+        
+        self.observation_space = spaces.Dict({
+            "camera_output": camera_space,
+            "sensor_output": sensor_space,
+            "robot_arm_location": arm_space
+        })
+        
+        # Initial state
+        self.state = {
+            "camera_output": np.zeros((64, 64, 3), dtype=np.uint8),
+            "sensor_output": np.zeros(5, dtype=np.float32),
+            "robot_arm_location": np.zeros((4, 3), dtype=np.float32)
+        }
+
+    def _apply_action(self, action):
         pass
 
     def _get_state(self, _scene_root):
@@ -187,8 +222,13 @@ class SofaColonEndoscopeEnv:
         return obs
 
     def step(self, action):
+        if self.robot is None or self.scene_root is None:
+            raise RuntimeError("Neither self.robot nor self.scene_root can be none. Dif you forget to call reset first?")
+
+        self.robot.step(self.scene_root, action)
         self.update_sofa_state(self.scene_root, action)
         self.sensor_output = self.update_sensor_output(self.scene_root)
+
         camera_sensors = self.sensor_output["camera_sensors"]
         self.last_render = self.render(self.scene_root, camera_sensors)
         obs = [self.last_render, self.sensor_output]
