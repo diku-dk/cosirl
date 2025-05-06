@@ -8,6 +8,19 @@ from gymnasium import spaces
 from src.simulator import setup_sofa
 from src.nn.colon_dataloader import create_mesh_dataloader
 from src.nn.data_augmentation import IdentityTransform
+from src.render.blender import render as blender_render
+
+class Mesh:
+    def __init__(self, vertices, faces, name):
+        self.vertices = vertices
+        self.faces = faces
+        self.name = name
+
+    @classmethod
+    def from_sofa_topology(cls, topo, name):
+        vertices = topo.position[:]
+        faces = topo.triangles[:]
+        return cls(vertices, faces, name)
 
 class Robot:
     @abstractmethod
@@ -65,23 +78,20 @@ class CapsuleRobot(Robot):
             low=0, high=255, shape=(64, 64, 3), dtype=np.uint8
         )
         
-        # Scalar sensor output
-        sensor_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(5,), dtype=np.float32
-        )
-        
         # Robot arm location
-        arm_space = spaces.Box(
-            low=-2.0, high=2.0, shape=(4, 3), dtype=np.float32
+        capsule_position = spaces.Box(
+            low=-robot_config["world_min"],
+            high=robot_config["world_max"],
+            shape=(1, 3),
+            dtype=np.float32,
         )
         
         self.observation_space = spaces.Dict({
             "camera_output": camera_space,
-            "sensor_output": sensor_space,
-            "robot_arm_location": arm_space
+            "capsule_position": capsule_position,
         })
         
-        verts = self.topology.positions[:] # [:] implicitly converts the SOFA data container to a numpy array
+        verts = self.topology.position[:] # [:] implicitly converts the SOFA data container to a numpy array
         self.camera_top_idx = np.argmax(verts[:,1]) # This it the up and down axis
         self.camera_bottom_idx = np.argmin(verts[:,1])
         self.camera_parameters = self.get_camera_parameters(
@@ -90,20 +100,13 @@ class CapsuleRobot(Robot):
                 self.camera_bottom_idx,
                 )
 
-        # Initial state
         self.state = {
-            "camera_output": np.zeros((64, 64, 3), dtype=np.uint8),
-            "sensor_output": np.zeros(5, dtype=np.float32),
-            "robot_arm_location": np.zeros((4, 3), dtype=np.float32)
+            "camera_output": np.zeros((128, 128, 3), dtype=np.uint8),
+            "capsule_position": self.camera_parameters["position"],
         }
-        
-        # Setup camera position
-        
-        import IPython
-        IPython.embed()
 
     def get_camera_parameters(self, topology, top_idx, bottom_idx):
-        verts = topology.positions[:] # [:] implicitly converts the SOFA data container to a numpy array
+        verts = topology.position[:] # [:] implicitly converts the SOFA data container to a numpy array
         p_top = verts[top_idx]
         p_bottom = verts[bottom_idx]
         camera_parameters = {
@@ -125,6 +128,7 @@ class CapsuleRobot(Robot):
                 self.camera_top_idx,
                 self.camera_bottom_idx,
                 )
+        return self
 
 def load_mesh(sofa_target, mesh_path):
     if mesh_path.endswith(".obj"):
@@ -184,6 +188,8 @@ class SofaColonEndoscopeEnv:
         )
         self.data_generator = iter(self.colon_dataloader)
         self.scene_root = None 
+        self.world_min = 0
+        self.world_max = 1
     
     def get_next_batch(self):
         try:
@@ -210,17 +216,17 @@ class SofaColonEndoscopeEnv:
         root.addObject('VisualStyle', displayFlags="showVisual showBehavior")
         
         # Add camera for better view
-        root.addObject('Camera', position=[0, 0, 10], lookAt=[0, 0, 0])
+        #root.addObject('Camera', position=[0, 0, 10], lookAt=[0, 0, 0])
         
         return root
- 
-
 
     def add_colon_to_scene(self, scene_root, colon_path: str):
         colon_node = scene_root.addChild("Colon")
         
         load_mesh(sofa_target=colon_node, mesh_path=colon_path)
-        colon_node.addObject('MeshTopology', src='@loader')
+        self.colon_topology = colon_node.addObject('MeshTopology', src='@loader')
+        self.world_min = min(self.world_min, np.min(self.colon_topology.position[:]))
+        self.world_max = max(self.world_max, np.max(self.colon_topology.position[:]))
 
         colon_node.addObject('MechanicalObject', name='dofs', template='Vec3d') 
         #visual = colon_node.addChild('Visual')
@@ -232,16 +238,23 @@ class SofaColonEndoscopeEnv:
         self.robot = CapsuleRobot(scene_root, robot_config)
 
     def reset(self):
+        self.world_min = 0
+        self.world_max = 1
         colon_path = self.get_next_batch()
         self.scene_root = self.init_sofa_scene()
         self.add_colon_to_scene(self.scene_root, colon_path=colon_path)
+        self.config["robot"].update(
+                {
+                    "world_min" : self.world_min,
+                    "world_max" : self.world_max,
+                    })
         self.add_robot_to_scene(self.scene_root, robot_config=self.config["robot"])
  
         self.scene_root.init()
 
         self.sensor_output = self.update_sensor_output(self.scene_root) 
         camera_sensors = self.sensor_output["camera_sensors"]
-        self.last_render = self.render(self.scene_root, camera_sensors)
+        self.last_render = self.render()
         obs = [self.last_render, self.sensor_output]
         return obs
 
@@ -276,8 +289,15 @@ class SofaColonEndoscopeEnv:
     def calculate_reward(self, scene_root, sensor_output):
         return 1.0 # TODO: Implement
 
-    def render(self, scene_root, camera_sensors):
-        return torch.zeros((100,100,1))
+    def render(self):
+        colon_mesh = Mesh.from_sofa_topology(self.colon_topology, "Colon")
+        render_params = {
+                "world_min" : self.world_min,
+                "world_max" : self.world_max,
+                }
+        render_params.update(self.robot.camera_parameters)
+        render_output = blender_render([colon_mesh], render_params)
+        return render_output
 
     def visualize_environment(self):
         # This function runs a simple Sofa GUI
