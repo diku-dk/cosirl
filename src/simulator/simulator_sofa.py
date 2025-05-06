@@ -43,7 +43,7 @@ class CapsuleRobot(Robot):
         self.capsule_node = scene_root.addChild("Robot")
         
         load_mesh(sofa_target=self.capsule_node, mesh_path=robot_config["mesh_path"])
-        self.capsule_node.addObject('MeshTopology', src='@loader')
+        self.topology = self.capsule_node.addObject('MeshTopology', src='@loader')
 
         self.capsule_node.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness=0.1, rayleighMass=0.1)
         self.capsule_node.addObject('CGLinearSolver', name='linearSolver', iterations=25, tolerance=1e-9, threshold=1e-9)
@@ -81,26 +81,50 @@ class CapsuleRobot(Robot):
             "robot_arm_location": arm_space
         })
         
+        verts = self.topology.positions[:] # [:] implicitly converts the SOFA data container to a numpy array
+        self.camera_top_idx = np.argmax(verts[:,1]) # This it the up and down axis
+        self.camera_bottom_idx = np.argmin(verts[:,1])
+        self.camera_parameters = self.get_camera_parameters(
+                self.topology,
+                self.camera_top_idx,
+                self.camera_bottom_idx,
+                )
+
         # Initial state
         self.state = {
             "camera_output": np.zeros((64, 64, 3), dtype=np.uint8),
             "sensor_output": np.zeros(5, dtype=np.float32),
             "robot_arm_location": np.zeros((4, 3), dtype=np.float32)
         }
+        
+        # Setup camera position
+        
+        import IPython
+        IPython.embed()
+
+    def get_camera_parameters(self, topology, top_idx, bottom_idx):
+        verts = topology.positions[:] # [:] implicitly converts the SOFA data container to a numpy array
+        p_top = verts[top_idx]
+        p_bottom = verts[bottom_idx]
+        camera_parameters = {
+                "position" : (p_top + p_bottom) / 2,
+                "look_at" : p_top,
+                "fov": 60.0,
+                "aspect_ratio": 16/9,
+                "near": 0.01,
+                "far": 100.0,
+                }
+        return camera_parameters
 
     def _apply_action(self, action):
         pass
 
     def _get_state(self, _scene_root):
-        pass
-        camera_params = {
-            "position": [0, 0, 0.5],
-            "lookAt": [0, 0, 2.0],
-            "fov": 60.0,
-            "aspect_ratio": 16/9,
-            "near": 0.01,
-            "far": 100.0
-        }
+        self.camera_parameters = self.get_camera_parameters(
+                self.topology,
+                self.camera_top_idx,
+                self.camera_bottom_idx,
+                )
 
 def load_mesh(sofa_target, mesh_path):
     if mesh_path.endswith(".obj"):
@@ -110,7 +134,7 @@ def load_mesh(sofa_target, mesh_path):
                 filename=mesh_path, 
                 triangulate=True,
                 )
-        _ = mesh_loader # why does it make a mesh_loader object?
+        _ = mesh_loader # why do we save a reference to the mesh_loader object?
     else:
         raise NotImplemented(f"Add more readers for this filetype: '{mesh_path}'")
 
